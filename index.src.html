@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Avoiding the dark together</title>
+	<link rel="stylesheet" href="layout.src.css" />
+	<script src="controller.src.js"></script>
+</head>
+<body>
+
+	<div class="full-row button-row">
+		<input type="button" class="button skip-back" />
+		<select class="select track"></select>
+		<span class="track-select-arrow"></span>
+		<input type="button" class="button skip-forward" />
+	</div>
+	<div class="full-row button-row">
+		<span class="button-label-container rewind">
+			<input type="button" class="button rewind" />
+		</span>
+		<input type="button" class="button pause" />
+		<div class="slider video-playback">
+			<div class="bar"></div>
+			<div class="gripper gripper-1"><div></div></div>
+			<div class="gripper-label">12:50</div>
+			<div class="max-value-label">17:24</div>
+		</div>
+		<span class="button-label-container fast-forward">
+			<input type="button" class="button fast-forward" />
+		</span>
+	</div>
+
+	<div class="full-row slider-row">
+		<div class="label">Brightness</div>
+		<div class="slider brightness">
+			<div class="bar"></div>
+			<div class="gripper gripper-1"><div></div></div>
+		</div>
+	</div>
+	<div class="full-row slider-row">
+		<div class="label">Slow Motion</div>
+		<div class="slider slow-motion">
+			<div class="bar"></div>
+			<div class="gripper gripper-1"><div></div></div>
+		</div>
+	</div>
+	<div class="full-row slider-row">
+		<div class="label">Red</div>
+		<div class="slider red-min-max">
+			<div class="bar"></div>
+			<div class="gripper gripper-1"><div></div></div>
+			<div class="gripper gripper-2"><div></div></div>
+		</div>
+	</div>
+	<div class="full-row checkbox-row">
+		<input type="checkbox" id="invert-red" class="invert-red" /><label for="invert-red">Invert Red</label>
+	</div>
+	<div class="full-row slider-row">
+		<div class="label">Green</div>
+		<div class="slider green-min-max">
+			<div class="bar"></div>
+			<div class="gripper gripper-1"><div></div></div>
+			<div class="gripper gripper-2"><div></div></div>
+		</div>
+	</div>
+	<div class="full-row checkbox-row">
+		<input type="checkbox" id="invert-green" class="invert-green" /><label for="invert-green">Invert Green</label>
+	</div>
+	<div class="full-row slider-row">
+		<div class="label">Blue</div>
+		<div class="slider blue-min-max">
+			<div class="bar"></div>
+			<div class="gripper gripper-1"><div></div></div>
+			<div class="gripper gripper-2"><div></div></div>
+		</div>
+	</div>
+	<div class="full-row checkbox-row">
+		<input type="checkbox" id="invert-blue" class="invert-blue" /><label for="invert-blue">Invert Blue</label>
+	</div>
+
+	<div class="full-row button-row padding-15">
+		<input type="button" value="Twinkle Red" class="button one-third-width twinkle-red" />
+		<input type="button" value="Twinkle Green" class="button one-third-width twinkle-green" />
+		<input type="button" value="Twinkle Blue" class="button one-third-width twinkle-blue" />
+	</div>
+	<div class="full-row button-row">
+		<input type="button" value="Invert All" class="button one-third-width invert-all" />
+		<input type="button" value="Rainbows" class="button one-third-width rainbows" />
+		<input type="button" value="Reset All" class="button one-third-width reset-all" />
+	</div>
+
+</body>
+</html>
