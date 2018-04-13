@@ -129,6 +129,7 @@
 			gripper1Label = getByClass("gripper-label", sliderElem), 
 			maxValueLabel = getByClass("max-value-label", sliderElem),
 			isDraggingGripper = null,
+			dragIncrementalUpdateInterval,
 			lastDragStartX,
 			positionAtTimeOfLastDragStart,
 
@@ -166,6 +167,18 @@
 				isDraggingGripper = gripper;
 				lastDragStartX = normalizedEventParams.clientX;
 				positionAtTimeOfLastDragStart = gripper === gripper1 ? position1 : position2;
+
+				dragIncrementalUpdateInterval = setInterval(function() {
+						if (isDraggingGripper === null) {
+							clearInterval(dragIncrementalUpdateInterval);
+							return;
+						}
+
+						positionChangeHandler(
+							This, 
+							isDraggingGripper === gripper1 ? 1 : 2, 
+							isDraggingGripper === gripper1 ? position1 : position2);
+					}, 2e3);
 			},
 
 			handleGripperMoveDrag = function(event) {
