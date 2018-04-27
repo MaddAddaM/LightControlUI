@@ -82,10 +82,97 @@
 		copyModel(currentPlayback, playbackBeforeLastPush);
 	};
 
-	// TODO load initial params
-	// TODO block off page until this happens
-	// TODO also block off the page and reload on page visibility change
-	// TODO run long polling and push in updates
+	var commsManager = function() {
+		var This = this, 
+			loadingUi = getByClass("loading-ui"), 
+			controlUi = getByClass("control-ui"), 
+
+			execXhr = function(method, url, payload, timeout, completedCallback, timeoutCallback) {
+				var xhr = new XMLHttpRequest();
+
+				xhr.abortTimer = setTimeout(function() {
+					if (xhr.readyState !== 4) {
+						xhr.abort();
+						timeoutCallback();
+					}
+				}, 3e4);
+
+				xhr.onreadystatechange = function() {
+					if (xhr.readyState === 4) {
+						completedCallback(xhr.responseText);
+					}
+				};
+
+				xhr.open(method, url);
+				xhr.send(payload);
+
+				return xhr;
+			},
+
+			createPlaybackModelFromServerState = function(serverState) {
+				var model = new playbackModel();
+
+				model.redMin = Math.min(serverState.r, serverState.R);
+				model.redMax = Math.max(serverState.r, serverState.R);
+				model.redInvert = serverState.R < serverState.r;
+				model.greenMin = Math.min(serverState.g, serverState.G);
+				model.greenMax = Math.max(serverState.g, serverState.G);
+				model.greenInvert = serverState.G < serverState.g;
+				model.blueMin = Math.min(serverState.b, serverState.B);
+				model.blueMax = Math.max(serverState.b, serverState.B);
+				model.blueInvert = serverState.B < serverState.b;
+				model.brightness = serverState.a;
+				model.frameSkip = serverState.s;
+				model.frameStretch = serverState.S;
+				model.videoDirectory = serverState.d;
+				model.videoSecondsElapsed = serverState.p;
+				model.videoIndex = serverState.v;
+
+				return model;
+			},
+
+			loadFullParams = function(loadedCallback) {
+				var doLoadAttempt = function() {
+					execXhr("GET", "/params", null, 3e4, completedCallback, doLoadAttempt);
+				},
+				completedCallback = function(responseText) {
+					var responseJson = JSON.parse(responseText);
+
+					if (responseJson) {
+						var model = createPlaybackModelFromServerState(responseJson);
+
+						if (model) {
+							currentPlayback = model;
+
+							if (uiView !== null)
+								uiView.setUiFromModel(model);
+						}
+
+						loadedCallback();
+					}
+				};
+
+				doLoadAttempt();
+			},
+
+			longPollParamsUpdates = function() {
+				console.debug("start long polling");
+				// TODO run long polling and push in updates
+			};
+
+		This.hardRefreshParams = function() {
+			loadingUi.style.display = "block";
+			controlUi.style.display = "none";
+
+			// TODO cancel any outstanding long polling
+			
+			loadFullParams(function() {
+				loadingUi.style.display = "none";
+				controlUi.style.display = "block";
+				longPollParamsUpdates();
+			});
+		};
+	};
 
 	// UI controllers
 	var buttonManager = function(buttonElem, clickHandler) {
@@ -132,12 +219,33 @@
 			dragIncrementalUpdateInterval,
 			lastDragStartX,
 			positionAtTimeOfLastDragStart,
+			rescheduledGripper1Move,
+			rescheduledGripper2Move,
 
 			getGripperTrackWidth = function() {
 				return bar.offsetWidth - gripper1.childNodes[0].offsetWidth;
 			},
 			
 			moveGripper = function(gripper, gripperLabel, position) {
+				var gripperTrackWidth = getGripperTrackWidth();
+				
+				if (gripperTrackWidth <= 0) {
+					var rescheduleAction = function() {
+						moveGripper(gripper, gripperLabel, position);
+					};
+
+					if (gripper === gripper1) {
+						clearTimeout(rescheduledGripper1Move);
+						rescheduledGripper1Move = setTimeout(rescheduleAction, 200);
+					}
+					else {
+						clearTimeout(rescheduledGripper2Move);
+						rescheduledGripper2Move = setTimeout(rescheduleAction, 200);
+					}
+
+					return;
+				}
+
 				var newGripperLeftPosition = getGripperTrackWidth() * (position / maxValue) - 10;
 
 				gripper.style.left = newGripperLeftPosition + "px";
@@ -282,28 +390,38 @@
 	};
 
 	// UI setup
-	var setupUi = function() {
-		var wrapMoveTrackSelect = function(delta) {
-			var index = trackSelect.selectedIndex;
-			if (!index) index = 0;
+	var uiView = function() {
+		var This = this,
+			skipBackButtonManager,
+			trackSelect,
+			skipForwardButtonManager,
+			rewindSpeed,
+			rewindButtonManager,
+			pauseActive = false,
+			pauseButtonManager,
+			fastForwardSpeed,
+			fastForwardButtonManager,
+			playbackSliderManager,
+			brightnessSliderManager,
+			slowMotionSliderManager,
+			redInvertCheckbox,
+			redSliderManager,
+			greenInvertCheckbox,
+			greenSliderManager,
+			blueInvertCheckbox,
+			blueSliderManager,
+			rainbowMode = false,
+			rainbowModeButtonManager,
+			wrapMoveTrackSelect = function(delta) {
+				var index = trackSelect.selectedIndex;
+				if (!index) index = 0;
 
-			index += delta;
-			if (index < 0) index = trackSelect.options.length - 1;
-			if (index >= trackSelect.options.length) index = 0;
+				index += delta;
+				if (index < 0) index = trackSelect.options.length - 1;
+				if (index >= trackSelect.options.length) index = 0;
 
-			trackSelect.selectedIndex = index;
-		};
-
-		var skipBackButton = getByClass("button skip-back"),
-			skipBackButtonManager = new buttonManager(
-			skipBackButton, 
-			function() {
-				wrapMoveTrackSelect(-1);
-				skipBackButton.blur();
-				trackSelect.onchange();
-			});
-
-		var trackSelect = getByClass("select track"),
+				trackSelect.selectedIndex = index;
+			},
 			setTrackList = function(tracks) {
 				for (; trackSelect.options.length > 0;)
 					trackSelect.options[0] = null;
@@ -312,44 +430,62 @@
 					trackSelect.options[trackSelect.options.length] = new Option(tracks[track].name, tracks[track].length);
 
 				trackSelect.selectedIndex = 0;
+			},
+			setRewindButtonState = function() {
+				rewindButtonManager.setLabel(rewindSpeed === null ? null : "speed-" + rewindSpeed + "x");
+				rewindButtonManager.toggleActive(rewindSpeed !== null);
+			},
+			setPauseButtonState = function() {
+				pauseButtonManager.toggleActive(pauseActive);
+			},
+			setFastForwardButtonState = function() {
+				fastForwardButtonManager.setLabel(fastForwardSpeed === null ? null : "speed-" + fastForwardSpeed + "x");
+				fastForwardButtonManager.toggleActive(fastForwardSpeed !== null);
+			},
+			setRainbowModeButtonState = function() {
+				rainbowModeButtonManager.toggleActive(rainbowMode);
 			};
-		trackSelect.onchange = function() {
-			playbackSliderManager.setMaxValue(trackSelect.options[trackSelect.selectedIndex].value);
-			playbackSliderManager.setPosition(1, 0);
 
-			currentPlayback.videoDirectory = rainbowMode ? 1 : 0;
-			currentPlayback.videoIndex = trackSelect.selectedIndex;
-			currentPlayback.videoSecondsElapsed = 0;
-			pushModelUpdates();
-		};
-		setTrackList(standardTracks);
-
-		var skipForwardButton = getByClass("button skip-forward"),
-			skipForwardButtonManager = new buttonManager(
-				skipForwardButton, 
+		This.setupUi = function() {
+			var skipBackButton = getByClass("button skip-back");	
+			skipBackButtonManager = new buttonManager(
+				skipBackButton, 
 				function() {
-					wrapMoveTrackSelect(1);
-					skipForwardButton.blur();
+					wrapMoveTrackSelect(-1);
+					skipBackButton.blur();
 					trackSelect.onchange();
 				});
 
+			trackSelect = getByClass("select track");
+			trackSelect.onchange = function() {
+				playbackSliderManager.setMaxValue(trackSelect.options[trackSelect.selectedIndex].value);
+				playbackSliderManager.setPosition(1, 0);
 
-		var rewindSpeed = null,
-			rewindButton = getByClass("button rewind"),
-			setRewindButtonState = function(buttonManager) {
-				buttonManager.setLabel(rewindSpeed === null ? null : "speed-" + rewindSpeed + "x");
+				currentPlayback.videoDirectory = rainbowMode ? 1 : 0;
+				currentPlayback.videoIndex = trackSelect.selectedIndex;
+				currentPlayback.videoSecondsElapsed = 0;
+				pushModelUpdates();
+			};
 
-				if (rewindSpeed === null || rewindSpeed === 2)
-					buttonManager.toggleActive(rewindSpeed !== null);
-			},
+			var skipForwardButton = getByClass("button skip-forward");
+			skipForwardButtonManager = new buttonManager(
+					skipForwardButton, 
+					function() {
+						wrapMoveTrackSelect(1);
+						skipForwardButton.blur();
+						trackSelect.onchange();
+					});
+
+
+			var rewindButton = getByClass("button rewind");
 			rewindButtonManager = new buttonManager(
 				rewindButton, 
 				function(buttonManager) {
 					fastForwardSpeed = null;
-					setFastForwardButtonState(fastForwardButtonManager);
+					setFastForwardButtonState();
 
 					pauseActive = false;
-					setPauseButtonState(pauseButtonManager);
+					setPauseButtonState();
 
 					if (rewindSpeed === null)
 						rewindSpeed = 2;
@@ -358,27 +494,23 @@
 					else
 						rewindSpeed++;
 
-					setRewindButtonState(buttonManager);
+					setRewindButtonState();
 					buttonManager.blur();
 
 					currentPlayback.frameSkip = rewindSpeed === null ? 0 : rewindSpeed * -1;
 					pushModelUpdates();
 				});
 
-		var pauseActive = false,
-			pauseButton = getByClass("button pause"),
-			setPauseButtonState = function(buttonManager) {
-				buttonManager.toggleActive(pauseActive);
-			},
+			var pauseButton = getByClass("button pause");
 			pauseButtonManager = new buttonManager(
 				pauseButton,
 				function(buttonManager) {
 					pauseActive = !pauseActive;
-					setPauseButtonState(buttonManager);
+					setPauseButtonState();
 
 					rewindSpeed = fastForwardSpeed = null;
-					setRewindButtonState(rewindButtonManager);
-					setFastForwardButtonState(fastForwardButtonManager);
+					setRewindButtonState();
+					setFastForwardButtonState();
 
 					pauseButton.blur();
 
@@ -386,22 +518,15 @@
 					pushModelUpdates();
 				});
 
-		var fastForwardSpeed = null,
-			fastForwardButton = getByClass("button fast-forward"),
-			setFastForwardButtonState = function(buttonManager) {
-				buttonManager.setLabel(fastForwardSpeed === null ? null : "speed-" + fastForwardSpeed + "x");
-
-				if (fastForwardSpeed === null || fastForwardSpeed === 2)
-					buttonManager.toggleActive(fastForwardSpeed !== null);
-			},
+			var fastForwardButton = getByClass("button fast-forward");
 			fastForwardButtonManager = new buttonManager(
 				fastForwardButton, 
 				function(buttonManager) {
 					rewindSpeed = null;
-					setRewindButtonState(rewindButtonManager);
+					setRewindButtonState();
 
 					pauseActive = false;
-					setPauseButtonState(pauseButtonManager);
+					setPauseButtonState();
 
 					if (fastForwardSpeed === null)
 						fastForwardSpeed = 2;
@@ -410,51 +535,48 @@
 					else
 						fastForwardSpeed++;
 
-					setFastForwardButtonState(buttonManager);
+					setFastForwardButtonState();
 					buttonManager.blur();
 
 					currentPlayback.frameSkip = fastForwardSpeed === null ? 0 : fastForwardSpeed - 1;
 					pushModelUpdates();
 				});
 
-		// playback indicator
-		var playbackSliderManager = new sliderManager(
-			getByClass("slider video-playback"), 
-			0, 
-			0, 
-			function(sliderManager, gripperIndex, position) {
-				currentPlayback.videoSecondsElapsed = position;
-				pushModelUpdates();
-			}, 
-			function(position) {
-				return Math.floor(position / 60) + ":" + (position % 60).toString().padStart(2, '0');
-			});
-		playbackSliderManager.setMaxValue(trackSelect.options[trackSelect.selectedIndex].value);
-		playbackSliderManager.setPosition(1, 0);
+			// playback indicator
+			playbackSliderManager = new sliderManager(
+				getByClass("slider video-playback"), 
+				0, 
+				0, 
+				function(sliderManager, gripperIndex, position) {
+					currentPlayback.videoSecondsElapsed = position;
+					pushModelUpdates();
+				}, 
+				function(position) {
+					return Math.floor(position / 60) + ":" + (position % 60).toString().padStart(2, '0');
+				});
 
-		// brightness
-		var brightnessSliderManager = new sliderManager(
-			getByClass("slider brightness"), 
-			0, 
-			255, 
-			function(sliderManager, gripperIndex, position) {
-				currentPlayback.brightness = position;
-				pushModelUpdates();
-			});
-		brightnessSliderManager.setPosition(1, 255);
+			// brightness
+			brightnessSliderManager = new sliderManager(
+				getByClass("slider brightness"), 
+				0, 
+				255, 
+				function(sliderManager, gripperIndex, position) {
+					currentPlayback.brightness = position;
+					pushModelUpdates();
+				});
 
-		// slow motion
-		var slowMotionSliderManager = new sliderManager(
-			getByClass("slider slow-motion"), 
-			0, 
-			250, 
-			function(sliderManager, gripperIndex, position) {
-				currentPlayback.frameStretch = position;
-				pushModelUpdates();
-			});
+			// slow motion
+			slowMotionSliderManager = new sliderManager(
+				getByClass("slider slow-motion"), 
+				0, 
+				250, 
+				function(sliderManager, gripperIndex, position) {
+					currentPlayback.frameStretch = position;
+					pushModelUpdates();
+				});
 
-		// RGB settings
-		var redInvertCheckbox = getByClass("invert-red"),
+			// RGB settings
+			redInvertCheckbox = getByClass("invert-red");
 			redSliderManager = new sliderManager(
 				getByClass("slider red-min-max"), 
 				0, 
@@ -463,16 +585,14 @@
 					currentPlayback[gripperIndex === 1 ? "redMin" : "redMax"] = position;
 					pushModelUpdates();
 				});
-		redSliderManager.setPosition(1, 0);
-		redSliderManager.setPosition(2, 255);
 
-		redInvertCheckbox.onchange = function() {
-			redInvertCheckbox.blur();
-			currentPlayback.redInvert = redInvertCheckbox.checked;
-			pushModelUpdates();
-		};
+			redInvertCheckbox.onchange = function() {
+				redInvertCheckbox.blur();
+				currentPlayback.redInvert = redInvertCheckbox.checked;
+				pushModelUpdates();
+			};
 
-		var greenInvertCheckbox = getByClass("invert-green"),
+			greenInvertCheckbox = getByClass("invert-green");
 			greenSliderManager = new sliderManager(
 				getByClass("slider green-min-max"), 
 				0, 
@@ -481,16 +601,14 @@
 					currentPlayback[gripperIndex === 1 ? "greenMin" : "greenMax"] = position;
 					pushModelUpdates();
 				});
-		greenSliderManager.setPosition(1, 0);
-		greenSliderManager.setPosition(2, 255);
 
-		greenInvertCheckbox.onchange = function() {
-			greenInvertCheckbox.blur();
-			currentPlayback.greenInvert = greenInvertCheckbox.checked;
-			pushModelUpdates();
-		};
+			greenInvertCheckbox.onchange = function() {
+				greenInvertCheckbox.blur();
+				currentPlayback.greenInvert = greenInvertCheckbox.checked;
+				pushModelUpdates();
+			};
 
-		var blueInvertCheckbox = getByClass("invert-blue"),
+			blueInvertCheckbox = getByClass("invert-blue");
 			blueSliderManager = new sliderManager(
 				getByClass("slider blue-min-max"), 
 				0, 
@@ -499,75 +617,72 @@
 					currentPlayback[gripperIndex === 1 ? "blueMin" : "blueMax"] = position;
 					pushModelUpdates();
 				});
-		blueSliderManager.setPosition(1, 0);
-		blueSliderManager.setPosition(2, 255);
 
-		blueInvertCheckbox.onchange = function() {
-			blueInvertCheckbox.blur();
-			currentPlayback.blueInvert = blueInvertCheckbox.checked;
-			pushModelUpdates();
-		};
+			blueInvertCheckbox.onchange = function() {
+				blueInvertCheckbox.blur();
+				currentPlayback.blueInvert = blueInvertCheckbox.checked;
+				pushModelUpdates();
+			};
 
-		// twinkle buttons
-		var setTwinkleValues = function(redMin, redMax, greenMin, greenMax, blueMin, blueMax) {
-			currentPlayback.redMin = redMin === null ? 0 : redMin;
-			currentPlayback.redMax = redMax === null ? 64 : redMax;
-			currentPlayback.greenMin = greenMin === null ? 0 : greenMin;
-			currentPlayback.greenMax = greenMax === null ? 64 : greenMax;
-			currentPlayback.blueMin = blueMin === null ? 0 : blueMin;
-			currentPlayback.blueMax = blueMax === null ? 64 : blueMax;
+			// twinkle buttons
+			var setTwinkleValues = function(redMin, redMax, greenMin, greenMax, blueMin, blueMax) {
+				currentPlayback.redMin = redMin === null ? 0 : redMin;
+				currentPlayback.redMax = redMax === null ? 64 : redMax;
+				currentPlayback.greenMin = greenMin === null ? 0 : greenMin;
+				currentPlayback.greenMax = greenMax === null ? 64 : greenMax;
+				currentPlayback.blueMin = blueMin === null ? 0 : blueMin;
+				currentPlayback.blueMax = blueMax === null ? 64 : blueMax;
 
-			redSliderManager.setPosition(1, currentPlayback.redMin);
-			redSliderManager.setPosition(2, currentPlayback.redMax);
-			greenSliderManager.setPosition(1, currentPlayback.greenMin);
-			greenSliderManager.setPosition(2, currentPlayback.greenMax);
-			blueSliderManager.setPosition(1, currentPlayback.blueMin);
-			blueSliderManager.setPosition(2, currentPlayback.blueMax);
+				redSliderManager.setPosition(1, currentPlayback.redMin);
+				redSliderManager.setPosition(2, currentPlayback.redMax);
+				greenSliderManager.setPosition(1, currentPlayback.greenMin);
+				greenSliderManager.setPosition(2, currentPlayback.greenMax);
+				blueSliderManager.setPosition(1, currentPlayback.blueMin);
+				blueSliderManager.setPosition(2, currentPlayback.blueMax);
 
-			redInvertCheckbox.checked = greenInvertCheckbox.checked = blueInvertCheckbox.checked = 
-				currentPlayback.redInvert = currentPlayback.greenInvert = currentPlayback.blueInvert = false;
+				redInvertCheckbox.checked = greenInvertCheckbox.checked = blueInvertCheckbox.checked = 
+					currentPlayback.redInvert = currentPlayback.greenInvert = currentPlayback.blueInvert = false;
 
-			pushModelUpdates();
-		};
+				pushModelUpdates();
+			};
 
-		var twinkleRedButton = getByClass("twinkle-red"), 
-			twinkleGreenButton = getByClass("twinkle-green"), 
-			twinkleBlueButton = getByClass("twinkle-blue");
+			var twinkleRedButton = getByClass("twinkle-red"), 
+				twinkleGreenButton = getByClass("twinkle-green"), 
+				twinkleBlueButton = getByClass("twinkle-blue");
 
-		twinkleRedButton.onclick = function() {
-			twinkleRedButton.blur();
-			setTwinkleValues(65, 255, null, null, null, null);
-		};
+			twinkleRedButton.onclick = function() {
+				twinkleRedButton.blur();
+				setTwinkleValues(65, 255, null, null, null, null);
+			};
 
-		twinkleGreenButton.onclick = function() {
-			twinkleGreenButton.blur();
-			setTwinkleValues(null, null, 65, 255, null, null);
-		};
+			twinkleGreenButton.onclick = function() {
+				twinkleGreenButton.blur();
+				setTwinkleValues(null, null, 65, 255, null, null);
+			};
 
-		twinkleBlueButton.onclick = function() {
-			twinkleBlueButton.blur();
-			setTwinkleValues(null, null, null, null, 65, 255);
-		};
+			twinkleBlueButton.onclick = function() {
+				twinkleBlueButton.blur();
+				setTwinkleValues(null, null, null, null, 65, 255);
+			};
 
-		// invert button
-		var invertAllButton = getByClass("invert-all");
-		invertAllButton.onclick = function() {
-			invertAllButton.blur();
-			var newInvertValue = !redInvertCheckbox.checked;
-			redInvertCheckbox.checked = greenInvertCheckbox.checked = blueInvertCheckbox.checked = 
-				currentPlayback.redInvert = currentPlayback.greenInvert = currentPlayback.blueInvert = newInvertValue;
-			pushModelUpdates();
-		};
+			// invert button
+			var invertAllButton = getByClass("invert-all");
+			invertAllButton.onclick = function() {
+				invertAllButton.blur();
+				var newInvertValue = !redInvertCheckbox.checked;
+				redInvertCheckbox.checked = greenInvertCheckbox.checked = blueInvertCheckbox.checked = 
+					currentPlayback.redInvert = currentPlayback.greenInvert = currentPlayback.blueInvert = newInvertValue;
+				pushModelUpdates();
+			};
 
-		var rainbowMode = false,
-			rainbowModeSwitchBackVideoIndex = 0,
-			rainbowModeButton = getByClass("button rainbows"),
+			var rainbowModeSwitchBackVideoIndex = 0,
+				rainbowModeButton = getByClass("button rainbows");
 			rainbowModeButtonManager = new buttonManager(
 				rainbowModeButton, 
 				function(buttonManager) {
 					var currentVideoIndex = trackSelect.selectedIndex;
 					rainbowMode = !rainbowMode;
-					buttonManager.toggleActive(rainbowMode);
+					setRainbowModeButtonState();
 					setTrackList(rainbowMode ? rainbowTracks : standardTracks);
 					trackSelect.selectedIndex = rainbowModeSwitchBackVideoIndex;
 					rainbowModeSwitchBackVideoIndex = currentVideoIndex;
@@ -575,38 +690,82 @@
 					rainbowModeButton.blur();
 				});
 
-		// reset button
-		var resetButton = getByClass("reset-all");
-		resetButton.onclick = function() {
-			resetButton.blur();
+			// reset button
+			var resetButton = getByClass("reset-all");
+			resetButton.onclick = function() {
+				resetButton.blur();
 
-			currentPlayback.brightness = 255;
-			brightnessSliderManager.setPosition(1, 255);
+				currentPlayback.brightness = 255;
+				currentPlayback.frameStretch = 0;
 
-			currentPlayback.frameStretch = 0;
-			slowMotionSliderManager.setPosition(1, 0);
+				currentPlayback.redMin = 0;
+				currentPlayback.redMax = 255;
+				currentPlayback.redInvert = false;
 
-			currentPlayback.redMin = 0;
-			currentPlayback.redMax = 255;
-			redSliderManager.setPosition(1, 0);
-			redSliderManager.setPosition(2, 255);
-			currentPlayback.redInvert = redInvertCheckbox.checked = false;
+				currentPlayback.greenMin = 0;
+				currentPlayback.greenMax = 255;
+				currentPlayback.greenInvert = false;
 
-			currentPlayback.greenMin = 0;
-			currentPlayback.greenMax = 255;
-			greenSliderManager.setPosition(1, 0);
-			greenSliderManager.setPosition(2, 255);
-			currentPlayback.greenInvert = greenInvertCheckbox.checked = false;
+				currentPlayback.blueMin = 0;
+				currentPlayback.blueMax = 255;
+				currentPlayback.blueInvert = false;
 
-			currentPlayback.blueMin = 0;
-			currentPlayback.blueMax = 255;
-			blueSliderManager.setPosition(1, 0);
-			blueSliderManager.setPosition(2, 255);
-			currentPlayback.blueInvert = blueInvertCheckbox.checked = false;
+				This.setUiFromModel(currentPlayback);
+				pushModelUpdates();
+			};
 
-			pushModelUpdates();
+			This.setUiFromModel(currentPlayback);
+		};
+
+		This.setUiFromModel = function(model) {
+			setTrackList(model.videoDirectory === 1 ? rainbowTracks : standardTracks);
+			trackSelect.selectedIndex = model.videoIndex < trackSelect.options.length 
+				? model.videoIndex
+				: 0;
+
+			rewindSpeed = model.frameSkip < -1 ? model.frameSkip * -1 : null;
+			pauseActive = model.frameSkip === -1;
+			fastForwardSpeed = model.frameSkip > 0 ? model.frameSkip + 1 : null;
+
+			setRewindButtonState();
+			setPauseButtonState();
+			setFastForwardButtonState();
+
+			playbackSliderManager.setMaxValue(trackSelect.options[trackSelect.selectedIndex].value);
+			playbackSliderManager.setPosition(1, model.videoSecondsElapsed);
+
+			brightnessSliderManager.setPosition(1, model.brightness);
+			slowMotionSliderManager.setPosition(1, model.frameStretch);
+
+			redSliderManager.setPosition(1, model.redMin);
+			redSliderManager.setPosition(2, model.redMax);
+			redInvertCheckbox.checked = model.redInvert;
+
+			greenSliderManager.setPosition(1, model.greenMin);
+			greenSliderManager.setPosition(2, model.greenMax);
+			greenInvertCheckbox.checked = model.greenInvert;
+
+			blueSliderManager.setPosition(1, model.blueMin);
+			blueSliderManager.setPosition(2, model.blueMax);
+			blueInvertCheckbox.checked = model.blueInvert;
+
+			rainbowMode = model.videoDirectory === 1;
+			setRainbowModeButtonState();
 		};
 	};
 
-	document.addEventListener('DOMContentLoaded', setupUi, false);
+	var uiView = new uiView(), 
+		comms = null;
+
+	document.addEventListener("DOMContentLoaded", function() {
+			uiView.setupUi();
+
+			comms = new commsManager();
+			comms.hardRefreshParams();
+		}, false);
+
+	document.addEventListener("visibilitychange", function() {
+		if (document.visibilityState === "visible" && comms !== null)
+			comms.hardRefreshParams();
+	}, false);
 })();
