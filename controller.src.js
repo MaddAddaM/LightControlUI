@@ -72,8 +72,8 @@
 		if (!hasAnyChanges)
 			return;
 
-		if (initialSettingsLoaded) {
-			// TODO push the updated props to the server
+		if (initialSettingsLoaded && comms !== null) {
+			comms.pushParamsPatch(modelOfUpdatedPropsOnly);
 		}
 
 		// TODO DEBUG
@@ -131,34 +131,133 @@
 				return model;
 			},
 
+			findPatchProperty = function(patchModel, playbackModel, prop) {
+				if (patchModel[prop] === null)
+					return playbackModel[prop];
+
+				return patchModel[prop];
+			},
+
+			createColorspacePatchForModel = function(model, serverState, colorProp, invertProp, stdOutput, invertOutput) {
+				serverState[currentPlayback[invertProp] ? invertOutput: stdOutput] = model[colorProp];
+			},
+
+			createServerStatePatchFromPlaybackModelDiff = function(model) {
+				var serverState = {};
+
+				if (model.redMin !== null)
+					createColorspacePatchForModel(model, serverState, "redMin", "redInvert", "a", "A");
+
+				if (model.redMax !== null)
+					createColorspacePatchForModel(model, serverState, "redMax", "redInvert", "A", "a");
+
+				if (model.redInvert !== null && model.redMin === null)
+					createColorspacePatchForModel(currentPlayback, serverState, "redMin", "redInvert", "a", "A");
+
+				if (model.redInvert !== null && model.redMax === null)
+					createColorspacePatchForModel(currentPlayback, serverState, "redMax", "redInvert", "A", "a");
+
+				if (model.greenMin !== null)
+					createColorspacePatchForModel(model, serverState, "greenMin", "greenInvert", "g", "G");
+
+				if (model.greenMax !== null)
+					createColorspacePatchForModel(model, serverState, "greenMax", "greenInvert", "G", "g");
+
+				if (model.greenInvert !== null && model.greenMin === null)
+					createColorspacePatchForModel(currentPlayback, serverState, "greenMin", "greenInvert", "g", "G");
+
+				if (model.greenInvert !== null && model.greenMax === null)
+					createColorspacePatchForModel(currentPlayback, serverState, "greenMax", "greenInvert", "G", "g");
+
+				if (model.blueMin !== null)
+					createColorspacePatchForModel(model, serverState, "blueMin", "blueInvert", "b", "B");
+
+				if (model.blueMax !== null)
+					createColorspacePatchForModel(model, serverState, "blueMax", "blueInvert", "B", "b");
+
+				if (model.blueInvert !== null && model.blueMin === null)
+					createColorspacePatchForModel(currentPlayback, serverState, "blueMin", "blueInvert", "b", "B");
+
+				if (model.blueInvert !== null && model.blueMax === null)
+					createColorspacePatchForModel(currentPlayback, serverState, "blueMax", "blueInvert", "B", "b");
+
+				if (model.brightness !== null)
+					serverState.a = model.brightness;
+
+				if (model.frameSkip !== null)
+					serverState.s = model.frameSkip;
+
+				if (model.frameStretch !== null)
+					serverState.S = model.frameStretch;
+
+				if (model.videoDirectory !== null) {
+					serverState.d = model.videoDirectory;
+					serverState.v = findPatchProperty(model, currentPlayback, "videoIndex");
+					serverState.p = findPatchProperty(model, currentPlayback, "videoSecondsElapsed");
+				}
+
+				if (model.videoSecondsElapsed !== null)
+					serverState.p = model.videoSecondsElapsed;
+
+				if (model.videoIndex !== null) {
+					serverState.v = model.videoIndex;
+					serverState.p = findPatchProperty(model, currentPlayback, "videoSecondsElapsed");
+				}
+
+				// TODO DEBUG
+				console.debug(serverState);
+
+				return serverState;
+			},
+
+			updateUiWithLoadedParams = function(responseText) {
+				var responseJson = JSON.parse(responseText);
+
+				if (responseJson) {
+					var model = createPlaybackModelFromServerState(responseJson);
+
+					if (model) {
+						initialSettingsLoaded = true;
+
+						currentPlayback = model;
+						copyModel(currentPlayback, playbackBeforeLastPush);
+
+						if (uiView !== null)
+							uiView.setUiFromModel(model);
+					}
+				}
+			},
+
 			loadFullParams = function(loadedCallback) {
 				var doLoadAttempt = function() {
 					execXhr("GET", "/params", null, 3e4, completedCallback, doLoadAttempt);
-				},
+				}, 
 				completedCallback = function(responseText) {
-					var responseJson = JSON.parse(responseText);
-
-					if (responseJson) {
-						var model = createPlaybackModelFromServerState(responseJson);
-
-						if (model) {
-							currentPlayback = model;
-
-							if (uiView !== null)
-								uiView.setUiFromModel(model);
-						}
-
-						loadedCallback();
-					}
+					updateUiWithLoadedParams(responseText);
+					loadedCallback();
 				};
 
 				doLoadAttempt();
+			},
+
+			putParamsPatch = function(serverPatch) {
+				var patchParams = JSON.stringify(serverPatch),
+					doPutAttempt = function() {
+						execXhr("PUT", "/params", patchParams, 3e4, updateUiWithLoadedParams, doPutAttempt);
+					};
+
+				doPutAttempt();
 			},
 
 			longPollParamsUpdates = function() {
 				console.debug("start long polling");
 				// TODO run long polling and push in updates
 			};
+
+		This.pushParamsPatch = function(patchModel) {
+			var serverPatch = createServerStatePatchFromPlaybackModelDiff(patchModel);
+			putParamsPatch(serverPatch);
+		};
 
 		This.hardRefreshParams = function() {
 			loadingUi.style.display = "block";
@@ -378,6 +477,12 @@
 				position2 = fixPositionBounds(Math.max(newPosition, position1 + 1));
 				moveGripper(gripper2, null, position2);
 			}
+		};
+
+		This.setPositions = function(newPositionGripper1, newPositionGripper2) {
+			This.setPosition(1, 0); // get out of the way so that max won't through a bounds check error
+			This.setPosition(2, newPositionGripper2);
+			This.setPosition(1, newPositionGripper1);
 		};
 
 		This.setMinValue(minValue);
@@ -633,12 +738,9 @@
 				currentPlayback.blueMin = blueMin === null ? 0 : blueMin;
 				currentPlayback.blueMax = blueMax === null ? 64 : blueMax;
 
-				redSliderManager.setPosition(1, currentPlayback.redMin);
-				redSliderManager.setPosition(2, currentPlayback.redMax);
-				greenSliderManager.setPosition(1, currentPlayback.greenMin);
-				greenSliderManager.setPosition(2, currentPlayback.greenMax);
-				blueSliderManager.setPosition(1, currentPlayback.blueMin);
-				blueSliderManager.setPosition(2, currentPlayback.blueMax);
+				redSliderManager.setPositions(currentPlayback.redMin, currentPlayback.redMax);
+				greenSliderManager.setPositions(currentPlayback.greenMin, currentPlayback.greenMax);
+				blueSliderManager.setPositions(currentPlayback.blueMin, currentPlayback.blueMax);
 
 				redInvertCheckbox.checked = greenInvertCheckbox.checked = blueInvertCheckbox.checked = 
 					currentPlayback.redInvert = currentPlayback.greenInvert = currentPlayback.blueInvert = false;
@@ -737,16 +839,13 @@
 			brightnessSliderManager.setPosition(1, model.brightness);
 			slowMotionSliderManager.setPosition(1, model.frameStretch);
 
-			redSliderManager.setPosition(1, model.redMin);
-			redSliderManager.setPosition(2, model.redMax);
+			redSliderManager.setPositions(model.redMin, model.redMax);
 			redInvertCheckbox.checked = model.redInvert;
 
-			greenSliderManager.setPosition(1, model.greenMin);
-			greenSliderManager.setPosition(2, model.greenMax);
+			greenSliderManager.setPositions(model.greenMin, model.greenMax);
 			greenInvertCheckbox.checked = model.greenInvert;
 
-			blueSliderManager.setPosition(1, model.blueMin);
-			blueSliderManager.setPosition(2, model.blueMax);
+			blueSliderManager.setPositions(model.blueMin, model.blueMax);
 			blueInvertCheckbox.checked = model.blueInvert;
 
 			rainbowMode = model.videoDirectory === 1;
