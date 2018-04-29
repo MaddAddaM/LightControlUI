@@ -76,9 +76,6 @@
 			comms.pushParamsPatch(modelOfUpdatedPropsOnly);
 		}
 
-		// TODO DEBUG
-		console.debug(modelOfUpdatedPropsOnly);
-
 		copyModel(currentPlayback, playbackBeforeLastPush);
 	};
 
@@ -86,6 +83,32 @@
 		var This = this, 
 			loadingUi = getByClass("loading-ui"), 
 			controlUi = getByClass("control-ui"), 
+			activeLongPollXhr = null,
+			longPollingActive = false,
+			nextLongPollDelayTimer,
+			timeOfLastLongPoll = (new Date()).getTime(),
+
+			createJson = function(obj) {
+				var jsonStr = null;
+
+				try {
+					jsonStr = JSON.stringify(obj);
+				}
+				catch (exception) { }
+
+				return jsonStr;
+			},
+
+			parseJson = function(jsonStr) {
+				var obj = null;
+
+				try {
+					obj = JSON.parse(jsonStr);
+				}
+				catch (exception) { }
+
+				return obj;
+			},
 
 			execXhr = function(method, url, payload, timeout, completedCallback, timeoutCallback) {
 				var xhr = new XMLHttpRequest();
@@ -204,14 +227,11 @@
 					serverState.p = findPatchProperty(model, currentPlayback, "videoSecondsElapsed");
 				}
 
-				// TODO DEBUG
-				console.debug(serverState);
-
 				return serverState;
 			},
 
 			updateUiWithLoadedParams = function(responseText) {
-				var responseJson = JSON.parse(responseText);
+				var responseJson = parseJson(responseText);
 
 				if (responseJson) {
 					var model = createPlaybackModelFromServerState(responseJson);
@@ -241,20 +261,64 @@
 			},
 
 			putParamsPatch = function(serverPatch) {
-				var patchParams = JSON.stringify(serverPatch),
+				var patchParams = createJson(serverPatch),
+					completedCallback = function(responseText) {
+						updateUiWithLoadedParams(responseText);
+						longPollParamsUpdates();
+					},
 					doPutAttempt = function() {
-						execXhr("PUT", "/params", patchParams, 3e4, updateUiWithLoadedParams, doPutAttempt);
+						execXhr("PUT", "/params", patchParams, 3e4, completedCallback, doPutAttempt);
 					};
 
 				doPutAttempt();
 			},
 
 			longPollParamsUpdates = function() {
-				console.debug("start long polling");
-				// TODO run long polling and push in updates
+				longPollingActive = true;
+				clearTimeout(nextLongPollDelayTimer);
+
+				if (activeLongPollXhr !== null) {
+					if ((new Date()).getTime() - timeOfLastLongPoll > 11e3) {
+						activeLongPollXhr.abort();
+						activeLongPollXhr = null;
+					}
+					else
+						return;
+				}
+
+				var completedCallback = function(responseText) {
+					activeLongPollXhr = null;
+					updateUiWithLoadedParams(responseText);
+
+					if (longPollingActive) {
+						clearTimeout(nextLongPollDelayTimer);
+						nextLongPollDelayTimer = setTimeout(longPollParamsUpdates, ((new Date()).getTime() - timeOfLastLongPoll - 1e4) * -1);
+					}
+				}, 
+				timeoutCallback = function() {
+					clearTimeout(nextLongPollDelayTimer);
+
+					nextLongPollDelayTimer = setTimeout(function() {
+						if (longPollingActive)
+							longPollParamsUpdates();
+					}, 5e3);
+				};
+
+				timeOfLastLongPoll = (new Date()).getTime();
+				activeLongPollXhr = execXhr("GET", "/next_params", null, 11e3, completedCallback, timeoutCallback);
+			},
+
+			cancelActiveLongPoll = function() {
+				clearTimeout(nextLongPollDelayTimer);
+				longPollingActive = false;
+
+				if (activeLongPollXhr !== null)
+					activeLongPollXhr.abort();
 			};
 
 		This.pushParamsPatch = function(patchModel) {
+			cancelActiveLongPoll();
+
 			var serverPatch = createServerStatePatchFromPlaybackModelDiff(patchModel);
 			putParamsPatch(serverPatch);
 		};
@@ -263,7 +327,7 @@
 			loadingUi.style.display = "block";
 			controlUi.style.display = "none";
 
-			// TODO cancel any outstanding long polling
+			cancelActiveLongPoll();
 			
 			loadFullParams(function() {
 				loadingUi.style.display = "none";
