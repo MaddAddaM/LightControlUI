@@ -54,36 +54,40 @@
 				toModel[prop] = fromModel[prop];
 	};
 
+	var createModelDiff = function(originalModel, newModel, diffModel) {
+		var hasAnyChanges = false;
+
+		for (var prop in newModel) {
+			if (newModel.hasOwnProperty(prop)) {
+				if (newModel[prop] !== originalModel[prop]) {
+					diffModel[prop] = newModel[prop];
+					hasAnyChanges = true;
+				}
+				else {
+					diffModel[prop] = null;
+				}
+			}
+		}
+
+		return hasAnyChanges;
+	};
+
 	var currentPlayback = new playbackModel(),
 		playbackBeforeLastPush = new playbackModel();
 
 	// server comms
 	var pushModelUpdates = function() {
 		var modelOfUpdatedPropsOnly = new playbackModel();
-		var hasAnyChanges = false;
+		var hasAnyChanges = createModelDiff(playbackBeforeLastPush, currentPlayback, modelOfUpdatedPropsOnly);
 
-		for (var prop in currentPlayback) {
-			if (currentPlayback.hasOwnProperty(prop)) {
-				if (currentPlayback[prop] !== playbackBeforeLastPush[prop] && 
-					(
-						prop !== "videoSecondsElapsed" || 
-						Math.abs(currentPlayback[prop] - playbackBeforeLastPush[prop]) > 2
-					)) {
+		if (modelOfUpdatedPropsOnly.videoSecondsElapsed !== null && 
+			Math.abs(currentPlayback.videoSecondsElapsed - playbackBeforeLastPush.videoSecondsElapsed) <= 2) {
 
-					modelOfUpdatedPropsOnly[prop] = currentPlayback[prop];
-					hasAnyChanges = true;
-				}
-				else {
-					modelOfUpdatedPropsOnly[prop] = null;
-				}
-			}
+			modelOfUpdatedPropsOnly.videoSecondsElapsed = null;
 		}
 
 		if (!hasAnyChanges)
 			return;
-
-		console.debug(modelOfUpdatedPropsOnly);
-		initialSettingsLoaded = true; // TODO DEBUG console.debug
 
 		if (initialSettingsLoaded && comms !== null)
 			comms.pushParamsPatch(modelOfUpdatedPropsOnly);
@@ -239,12 +243,10 @@
 					serverState.p = findWholeNumberPatchProperty(model, currentPlayback, "videoSecondsElapsed");
 				}
 
-				console.debug(serverState);
-
 				return serverState;
 			},
 
-			updateUiWithLoadedParams = function(responseText, ignoreDelayedUpdateValues) {
+			updateUiWithLoadedParams = function(responseText, ignoreDelayedUpdateValues, fuzzInPositionDifferences) {
 				var responseJson = parseJson(responseText);
 
 				if (responseJson) {
@@ -258,11 +260,18 @@
 							model.videoDirectory = currentPlayback.videoDirectory;
 						}
 
-						currentPlayback = model;
-						copyModel(currentPlayback, playbackBeforeLastPush);
+						if (fuzzInPositionDifferences && 
+							Math.abs(model.videoSecondsElapsed - currentPlayback.videoSecondsElapsed) <= 
+							3 * Math.abs(currentPlayback.frameSkip + 1) * 50 / (50 + currentPlayback.frameStretch)) {
+
+							model.videoSecondsElapsed = currentPlayback.videoSecondsElapsed;
+						}
 
 						if (uiView !== null)
-							uiView.setUiFromModel(model);
+							uiView.setUiFromModel(model, currentPlayback);
+
+						currentPlayback = model;
+						copyModel(currentPlayback, playbackBeforeLastPush);
 					}
 				}
 			},
@@ -272,7 +281,7 @@
 					execXhr("GET", "/params", null, 3e4, completedCallback, doLoadAttempt);
 				}, 
 				completedCallback = function(responseText) {
-					updateUiWithLoadedParams(responseText, false);
+					updateUiWithLoadedParams(responseText, false, false);
 					loadedCallback();
 				};
 
@@ -282,7 +291,7 @@
 			putParamsPatch = function(serverPatch) {
 				var patchParams = createJson(serverPatch),
 					completedCallback = function(responseText) {
-						updateUiWithLoadedParams(responseText, true);
+						updateUiWithLoadedParams(responseText, true, false);
 						nextPollDelayTimer = setTimeout(pollParamsUpdates, 2e3);
 					},
 					doPutAttempt = function() {
@@ -310,7 +319,7 @@
 					activePollXhr = null;
 
 					if (pollingActive) {
-						updateUiWithLoadedParams(responseText, false);
+						updateUiWithLoadedParams(responseText, false, true);
 
 						clearTimeout(nextPollDelayTimer);
 						nextPollDelayTimer = setTimeout(pollParamsUpdates, ((new Date()).getTime() - timeOfLastPoll - 1e3) * -1);
@@ -596,6 +605,7 @@
 			fastForwardSpeed,
 			fastForwardButtonManager,
 			playbackSliderManager,
+			playbackSliderLastTickTime,
 			brightnessSliderManager,
 			slowMotionSliderManager,
 			redInvertCheckbox,
@@ -761,8 +771,15 @@
 					return Math.floor(position / 60) + ":" + (position % 60).toString().padStart(2, '0');
 				});
 			setInterval(function() {
-				var adjustedFrameSkip = currentPlayback.frameSkip + 1, 
-					adjustedElapsedSeconds;
+				var playbackSliderCurrentTickTime = (new Date()).getTime(),
+					adjustedFrameSkip = currentPlayback.frameSkip + 1, 
+					adjustedElapsedSeconds, 
+					playbackModelBeforeChanges = new playbackModel(),
+					playbackTickElapsedMs = playbackSliderCurrentTickTime - playbackSliderLastTickTime;
+
+				playbackSliderLastTickTime = playbackSliderCurrentTickTime;
+
+				copyModel(currentPlayback, playbackModelBeforeChanges);
 
 				if (adjustedFrameSkip === 0) {
 					return;
@@ -772,6 +789,8 @@
 				}
 
 				adjustedElapsedSeconds /= (50 + currentPlayback.frameStretch) / 50;
+				adjustedElapsedSeconds *= playbackTickElapsedMs / 1000;
+
 				currentPlayback.videoSecondsElapsed += adjustedElapsedSeconds;
 
 				// this change in time happened on the server and client together with 
@@ -782,19 +801,17 @@
 				var activeTracks = currentPlayback.videoDirectory === 1 ? rainbowTracks : standardTracks;
 
 				if (currentPlayback.videoSecondsElapsed > activeTracks[currentPlayback.videoIndex].length) {
-					playbackBeforeLastPush.videoSecondsElapsed = currentPlayback.videoSecondsElapsed = 1;
+					playbackBeforeLastPush.videoSecondsElapsed = currentPlayback.videoSecondsElapsed = 0;
 					playbackBeforeLastPush.videoIndex = currentPlayback.videoIndex = (currentPlayback.videoIndex + 1) % activeTracks.length;
-					This.setUiFromModel(currentPlayback);
 				}
 				else if (currentPlayback.videoSecondsElapsed < 0) {
 					playbackBeforeLastPush.videoSecondsElapsed = currentPlayback.videoSecondsElapsed = activeTracks[currentPlayback.videoIndex].length;
 					playbackBeforeLastPush.videoIndex = currentPlayback.videoIndex = currentPlayback.videoIndex === 0 ? activeTracks.length - 1 : currentPlayback.videoIndex - 1;
-					This.setUiFromModel(currentPlayback);
 				}
-				else {
-					playbackSliderManager.setPosition(1, Math.round(currentPlayback.videoSecondsElapsed));
-				}
+				
+				This.setUiFromModel(currentPlayback, playbackModelBeforeChanges);
 			}, 1e3);
+			playbackSliderLastTickTime = (new Date()).getTime();
 
 			// brightness
 			brightnessSliderManager = new sliderManager(
@@ -926,8 +943,8 @@
 					setRainbowModeButtonState();
 					setTrackList(rainbowMode ? rainbowTracks : standardTracks);
 					trackSelect.selectedIndex = rainbowModeSwitchBackVideoIndex;
-					setTrackChange(false);
 					currentPlayback.videoSecondsElapsed = rainbowModeSwitchBackVideoSecondsElapsed;
+					setTrackChange(false);
 					playbackSliderManager.setPosition(1, currentPlayback.videoSecondsElapsed);
 
 					rainbowModeSwitchBackVideoIndex = currentVideoIndex;
@@ -939,6 +956,9 @@
 			var resetButton = getByClass("reset-all");
 			resetButton.onclick = function() {
 				resetButton.blur();
+
+				var playbackModelBeforeChanges = new playbackModel();
+				copyModel(currentPlayback, playbackModelBeforeChanges);
 
 				currentPlayback.brightness = 255;
 				currentPlayback.frameStretch = 0;
@@ -955,44 +975,83 @@
 				currentPlayback.blueMax = 255;
 				currentPlayback.blueInvert = false;
 
-				This.setUiFromModel(currentPlayback);
+				This.setUiFromModel(currentPlayback, playbackModelBeforeChanges);
 				pushModelUpdates();
 			};
 
-			This.setUiFromModel(currentPlayback);
+			This.setUiFromModel(currentPlayback, null);
 		};
 
-		This.setUiFromModel = function(model) {
-			setTrackList(model.videoDirectory === 1 ? rainbowTracks : standardTracks);
-			trackSelect.selectedIndex = model.videoIndex < trackSelect.options.length 
-				? model.videoIndex
-				: 0;
+		This.setUiFromModel = function(model, modelBeforeChanges) {
 
-			rewindSpeed = model.frameSkip < -1 ? model.frameSkip * -1 : null;
-			pauseActive = model.frameSkip === -1;
-			fastForwardSpeed = model.frameSkip > 0 ? model.frameSkip + 1 : null;
+			var modelOfChangesOnly = new playbackModel(),
+				hasModelChanges = true;
 
-			setRewindButtonState();
-			setPauseButtonState();
-			setFastForwardButtonState();
+			if (modelBeforeChanges !== null)
+				hasModelChanges = createModelDiff(modelBeforeChanges, model, modelOfChangesOnly);
+			else 
+				copyModel(model, modelOfChangesOnly);
 
-			playbackSliderManager.setMaxValue(trackSelect.options[trackSelect.selectedIndex].value);
-			playbackSliderManager.setPosition(1, Math.round(model.videoSecondsElapsed));
+			if (!hasModelChanges)
+				return;
 
-			brightnessSliderManager.setPosition(1, model.brightness);
-			slowMotionSliderManager.setPosition(1, model.frameStretch);
+			if (modelOfChangesOnly.videoDirectory !== null)
+				setTrackList(modelOfChangesOnly.videoDirectory === 1 ? rainbowTracks : standardTracks);
 
-			redSliderManager.setPositions(model.redMin, model.redMax);
-			redInvertCheckbox.checked = model.redInvert;
+			if (modelOfChangesOnly.videoIndex !== null) {
+				trackSelect.selectedIndex = modelOfChangesOnly.videoIndex < trackSelect.options.length 
+					? modelOfChangesOnly.videoIndex
+					: 0;
+			}
 
-			greenSliderManager.setPositions(model.greenMin, model.greenMax);
-			greenInvertCheckbox.checked = model.greenInvert;
+			if (modelOfChangesOnly.frameSkip !== null) {
+				rewindSpeed = modelOfChangesOnly.frameSkip < -1 ? modelOfChangesOnly.frameSkip * -1 : null;
+				pauseActive = modelOfChangesOnly.frameSkip === -1;
+				fastForwardSpeed = modelOfChangesOnly.frameSkip > 0 ? modelOfChangesOnly.frameSkip + 1 : null;
 
-			blueSliderManager.setPositions(model.blueMin, model.blueMax);
-			blueInvertCheckbox.checked = model.blueInvert;
+				setRewindButtonState();
+				setPauseButtonState();
+				setFastForwardButtonState();
+			}
 
-			rainbowMode = model.videoDirectory === 1;
-			setRainbowModeButtonState();
+			if (modelOfChangesOnly.videoIndex !== null || modelOfChangesOnly.videoDirectory !== null)
+				playbackSliderManager.setMaxValue(trackSelect.options[trackSelect.selectedIndex].value);
+			if (modelOfChangesOnly.videoSecondsElapsed !== null)
+				playbackSliderManager.setPosition(1, Math.round(modelOfChangesOnly.videoSecondsElapsed));
+
+			if (modelOfChangesOnly.brightness !== null)
+				brightnessSliderManager.setPosition(1, modelOfChangesOnly.brightness);
+			if (modelOfChangesOnly.frameStretch !== null)
+				slowMotionSliderManager.setPosition(1, modelOfChangesOnly.frameStretch);
+
+			if (modelOfChangesOnly.redMin !== null || modelOfChangesOnly.redMax !== null) {
+				redSliderManager.setPositions(
+					modelOfChangesOnly.redMin === null ? model.redMin : modelOfChangesOnly.redMin, 
+					modelOfChangesOnly.redMax === null ? model.redMax : modelOfChangesOnly.redMax);
+			}
+			if (modelOfChangesOnly.redInvert !== null)
+				redInvertCheckbox.checked = modelOfChangesOnly.redInvert;
+
+			if (modelOfChangesOnly.greenMin !== null || modelOfChangesOnly.greenMax !== null) {
+				greenSliderManager.setPositions(
+					modelOfChangesOnly.greenMin === null ? model.greenMin : modelOfChangesOnly.greenMin, 
+					modelOfChangesOnly.greenMax === null ? model.greenMax : modelOfChangesOnly.greenMax);
+			}
+			if (modelOfChangesOnly.greenInvert !== null)
+				greenInvertCheckbox.checked = modelOfChangesOnly.greenInvert;
+
+			if (modelOfChangesOnly.blueMin !== null || modelOfChangesOnly.blueMax !== null) {
+				blueSliderManager.setPositions(
+					modelOfChangesOnly.blueMin === null ? model.blueMin : modelOfChangesOnly.blueMin, 
+					modelOfChangesOnly.blueMax === null ? model.blueMax : modelOfChangesOnly.blueMax);
+			}
+			if (modelOfChangesOnly.blueInvert !== null)
+				blueInvertCheckbox.checked = modelOfChangesOnly.blueInvert;
+
+			if (modelOfChangesOnly.videoDirectory !== null) {
+				rainbowMode = modelOfChangesOnly.videoDirectory === 1;
+				setRainbowModeButtonState();
+			}
 		};
 	};
 
