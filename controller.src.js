@@ -998,9 +998,13 @@
 			if (modelOfChangesOnly.videoDirectory !== null)
 				setTrackList(modelOfChangesOnly.videoDirectory === 1 ? rainbowTracks : standardTracks);
 
-			if (modelOfChangesOnly.videoIndex !== null) {
-				trackSelect.selectedIndex = modelOfChangesOnly.videoIndex < trackSelect.options.length 
-					? modelOfChangesOnly.videoIndex
+			if (modelOfChangesOnly.videoIndex !== null || modelOfChangesOnly.videoDirectory !== null) {
+				var videoIndexToSet = modelOfChangesOnly.videoIndex === null 
+					? model.videoIndex 
+					: modelOfChangesOnly.videoIndex;
+
+				trackSelect.selectedIndex = videoIndexToSet < trackSelect.options.length 
+					? videoIndexToSet
 					: 0;
 			}
 
