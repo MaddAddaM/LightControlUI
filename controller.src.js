@@ -306,7 +306,7 @@
 				clearTimeout(nextPollDelayTimer);
 
 				if (activePollXhr !== null) {
-					if ((new Date()).getTime() - timeOfLastPoll > 6e3) {
+					if ((new Date()).getTime() - timeOfLastPoll > 8e3) {
 						activePollXhr.abort();
 						activePollXhr = null;
 					}
@@ -322,7 +322,7 @@
 						updateUiWithLoadedParams(responseText, false, true);
 
 						clearTimeout(nextPollDelayTimer);
-						nextPollDelayTimer = setTimeout(pollParamsUpdates, ((new Date()).getTime() - timeOfLastPoll - 1e3) * -1);
+						nextPollDelayTimer = setTimeout(pollParamsUpdates, Math.min((new Date()).getTime() - timeOfLastPoll - 1e3, 1) * -1);
 					}
 				}, 
 				timeoutCallback = function() {
@@ -775,7 +775,8 @@
 					adjustedFrameSkip = currentPlayback.frameSkip + 1, 
 					adjustedElapsedSeconds, 
 					playbackModelBeforeChanges = new playbackModel(),
-					playbackTickElapsedMs = playbackSliderCurrentTickTime - playbackSliderLastTickTime;
+					playbackTickElapsedMs = playbackSliderCurrentTickTime - playbackSliderLastTickTime,
+					activeTracks = currentPlayback.videoDirectory === 1 ? rainbowTracks : standardTracks;
 
 				playbackSliderLastTickTime = playbackSliderCurrentTickTime;
 
@@ -789,25 +790,14 @@
 				}
 
 				adjustedElapsedSeconds /= (50 + currentPlayback.frameStretch) / 50;
-				adjustedElapsedSeconds *= playbackTickElapsedMs / 1000;
 
 				currentPlayback.videoSecondsElapsed += adjustedElapsedSeconds;
+				currentPlayback.videoSecondsElapsed = Math.max(Math.min(currentPlayback.videoSecondsElapsed, activeTracks[currentPlayback.videoIndex].length), 0);
 
 				// this change in time happened on the server and client together with 
 				// out communication since it's passage-of-time based, so mark it as already 
 				// in sync with the last known client state so we don't send it
 				playbackBeforeLastPush.videoSecondsElapsed = currentPlayback.videoSecondsElapsed;
-
-				var activeTracks = currentPlayback.videoDirectory === 1 ? rainbowTracks : standardTracks;
-
-				if (currentPlayback.videoSecondsElapsed > activeTracks[currentPlayback.videoIndex].length) {
-					playbackBeforeLastPush.videoSecondsElapsed = currentPlayback.videoSecondsElapsed = 0;
-					playbackBeforeLastPush.videoIndex = currentPlayback.videoIndex = (currentPlayback.videoIndex + 1) % activeTracks.length;
-				}
-				else if (currentPlayback.videoSecondsElapsed < 0) {
-					playbackBeforeLastPush.videoSecondsElapsed = currentPlayback.videoSecondsElapsed = activeTracks[currentPlayback.videoIndex].length;
-					playbackBeforeLastPush.videoIndex = currentPlayback.videoIndex = currentPlayback.videoIndex === 0 ? activeTracks.length - 1 : currentPlayback.videoIndex - 1;
-				}
 				
 				This.setUiFromModel(currentPlayback, playbackModelBeforeChanges);
 			}, 1e3);
