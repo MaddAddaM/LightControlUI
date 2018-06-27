@@ -58,7 +58,9 @@
 			new trackModel("Chill: Muted colors moving around center point", 3590),
 			new trackModel("Bond: 1962", 274),
 			new trackModel("Bond: 1999", 188),
-			new trackModel("Bond: 2012", 232)],
+			new trackModel("Bond: 2012", 232),
+			new trackModel("Psychill Psychedelic Trippy Video 2017", 4478),
+			new trackModel("Fractalfest", 14763)],
 		rainbowTracks = [
 			new trackModel("Rainbows 1", 300),
 			new trackModel("Rainbows 2", 300),
