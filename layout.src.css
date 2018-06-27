@@ -58,7 +58,7 @@ label {
 
 .slider-row {
 	width: 100%;
-	overflow-x: hidden;
+	overflow: hidden;
 }
 
 .checkbox-row {
